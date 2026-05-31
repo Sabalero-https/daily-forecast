@@ -1,5 +1,20 @@
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0=Mon ... 6=Sun
 
+// Which two variables are inputs; the third is derived
+// revenue_mer   → input: revenue + MER,   derived: spend
+// spend_mer     → input: spend + MER,     derived: revenue
+// spend_revenue → input: spend + revenue, derived: MER
+export type ProjectionMode = "revenue_mer" | "spend_mer" | "spend_revenue";
+
+export type WeightMode = "manual" | "auto";
+
+export interface AutoWeightMeta {
+  rowCount: number;
+  monthCount: number;
+  dateFrom: string;
+  dateTo: string;
+}
+
 export interface ClientMeta {
   id: string;
   name: string;
@@ -26,10 +41,14 @@ export interface MonthCurve {
 export interface AppConfig {
   month: number; // 0-11
   year: number;
+  projectionMode: ProjectionMode;
   targetRevenue: number;
   targetMER: number;
+  targetSpend: number;
   guideAOV: number;
   guideCR: number;
+  weightMode: WeightMode;
+  autoWeightsMeta: AutoWeightMeta | null;
   // index 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
   dayWeights: [number, number, number, number, number, number, number];
   monthCurve: MonthCurve;

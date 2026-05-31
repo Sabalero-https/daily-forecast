@@ -52,8 +52,24 @@ export function computeDays(
   config: AppConfig,
   entries: Record<string, DayEntry>
 ): ComputedDay[] {
-  const { year, month, targetRevenue, targetMER, guideAOV, guideCR } = config;
-  const targetSpendTotal = targetMER > 0 ? targetRevenue / targetMER : 0;
+  const { year, month, projectionMode, targetRevenue, targetMER, targetSpend, guideAOV, guideCR } = config;
+
+  let totalRevenue: number;
+  let totalSpend: number;
+  switch (projectionMode ?? "revenue_mer") {
+    case "spend_mer":
+      totalSpend   = targetSpend;
+      totalRevenue = targetSpend * targetMER;
+      break;
+    case "spend_revenue":
+      totalSpend   = targetSpend;
+      totalRevenue = targetRevenue;
+      break;
+    default: // revenue_mer
+      totalRevenue = targetRevenue;
+      totalSpend   = targetMER > 0 ? targetRevenue / targetMER : 0;
+  }
+
   const crRatio = guideCR > 0 ? guideCR / 100 : 0;
   const todayStr = toDateStr(new Date());
 
@@ -68,8 +84,8 @@ export function computeDays(
     const dateStr = toDateStr(d);
     const w = weights[i];
     const share = totalWeight > 0 ? w / totalWeight : 0;
-    const tRev = targetRevenue * share;
-    const tSpend = targetSpendTotal * share;
+    const tRev = totalRevenue * share;
+    const tSpend = totalSpend * share;
     const tSessions = guideAOV > 0 && crRatio > 0 ? tRev / guideAOV / crRatio : null;
 
     const entry = entries[dateStr];

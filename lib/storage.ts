@@ -12,8 +12,12 @@ const projDataKey   = (cid: string, pid: string) => `dfe_proj_${cid}_${pid}_data
 export const DEFAULT_CONFIG: AppConfig = {
   month: new Date().getMonth(),
   year: new Date().getFullYear(),
+  projectionMode: "revenue_mer",
+  weightMode: "manual",
+  autoWeightsMeta: null,
   targetRevenue: 0,
   targetMER: 3,
+  targetSpend: 0,
   guideAOV: 0,
   guideCR: 0,
   dayWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
