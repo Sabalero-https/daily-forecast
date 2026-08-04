@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ConfigPanel from "@/components/ConfigPanel";
 import ForecastTable from "@/components/ForecastTable";
-import { AppConfig, ClientMeta, DayEntry, ProjectionMeta } from "@/lib/types";
+import { AppConfig, ClientMeta, DailyMetric, DayEntry, ProjectionMeta } from "@/lib/types";
 import { computeDays, computeTotals, toDateStr } from "@/lib/calc";
 import {
   DEFAULT_CONFIG,
@@ -85,6 +85,9 @@ export default function Home() {
   const [creating,       setCreating]       = useState<CreatingMode>(null);
   const [newName,        setNewName]        = useState("");
   const [saveFlash,      setSaveFlash]      = useState(false);
+  // CSV de Tiendanube cargado en esta sesión — NO se persiste (se resube cada
+  // vez), solo se usa para auto-completar Reality Revenue/Pedidos en la tabla.
+  const [tnMetrics,      setTnMetrics]      = useState<DailyMetric[] | null>(null);
 
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -111,6 +114,7 @@ export default function Home() {
     setActiveProjId(pid);
     setConfig(loadProjectionConfig(cid, pid));
     setEntries(loadProjectionEntries(cid, pid));
+    setTnMetrics(null); // el CSV de la sesión era del contexto anterior
   }
 
   function switchClient(cid: string) {
@@ -196,8 +200,29 @@ export default function Home() {
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────────
-  const days   = useMemo(() => config ? computeDays(config, entries) : [], [config, entries]);
+  // Vista de solo-cálculo: entries reales + overlay del CSV de Tiendanube (si hay
+  // uno cargado en la sesión) para Revenue/Pedidos. No se persiste — `entries` en
+  // sí queda intacto, así ninguna carga manual se pisa en localStorage/Sheets.
+  const displayEntries = useMemo(() => {
+    if (!tnMetrics) return entries;
+    const merged = { ...entries };
+    for (const m of tnMetrics) {
+      const existing = merged[m.date];
+      merged[m.date] = {
+        date: m.date,
+        weightOverride: existing?.weightOverride ?? null,
+        realityRevenue: m.revenue,
+        realitySpend: existing?.realitySpend ?? null,
+        realitySessions: existing?.realitySessions ?? null,
+        realityOrders: m.pedidos,
+      };
+    }
+    return merged;
+  }, [entries, tnMetrics]);
+
+  const days   = useMemo(() => config ? computeDays(config, displayEntries) : [], [config, displayEntries]);
   const totals = useMemo(() => computeTotals(days, toDateStr(new Date())), [days]);
+  const tiendanubeCoverage = useMemo(() => new Set((tnMetrics ?? []).map((m) => m.date)), [tnMetrics]);
 
   if (!hydrated || !config) {
     return (
@@ -328,13 +353,14 @@ export default function Home() {
 
       {/* ── Main ── */}
       <main className="max-w-[1600px] mx-auto px-4 xl:px-8 py-6 flex flex-col xl:flex-row gap-6">
-        <ConfigPanel config={config} onChange={handleConfigChange} />
+        <ConfigPanel config={config} onChange={handleConfigChange} onTiendanubeMetrics={setTnMetrics} />
         <ForecastTable
           config={config}
           days={days}
           totals={totals}
           entries={entries}
           onUpdateEntry={handleUpdateEntry}
+          tiendanubeCoverage={tiendanubeCoverage}
         />
       </main>
     </div>

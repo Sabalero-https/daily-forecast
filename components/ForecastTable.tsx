@@ -10,6 +10,9 @@ interface Props {
   totals: TotalsRow;
   entries: Record<string, DayEntry>;
   onUpdateEntry: (date: string, patch: Partial<DayEntry>) => void;
+  // Fechas cubiertas por un CSV de Tiendanube cargado en esta sesión — esos días
+  // muestran Revenue/Pedidos derivados del CSV (solo lectura) en vez del input manual.
+  tiendanubeCoverage?: Set<string>;
 }
 
 // ── Event badge palette ───────────────────────────────────────────────────────
@@ -63,6 +66,19 @@ function PacingBadge({ ratio }: { ratio: number | null }) {
                  "bg-red-900 text-red-300"
   );
   return <span className={cls}>{fmtPct(ratio)}</span>;
+}
+
+// ── Celda de solo lectura para valores auto-completados desde el CSV de Tiendanube ──
+
+function TiendanubeCell({ value, fmt }: { value: number; fmt: (n: number) => string }) {
+  return (
+    <div
+      className="w-full text-right px-1 py-0.5 text-xs tabular-nums text-emerald-400/80"
+      title="Auto-completado desde el CSV de Tiendanube de esta sesión"
+    >
+      {fmt(value)}
+    </div>
+  );
 }
 
 // ── Inline editable number cell ───────────────────────────────────────────────
@@ -178,7 +194,9 @@ function GuideCard({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ForecastTable({ config, days, totals, entries, onUpdateEntry }: Props) {
+export default function ForecastTable({
+  config, days, totals, entries, onUpdateEntry, tiendanubeCoverage,
+}: Props) {
   if (days.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
@@ -243,6 +261,7 @@ export default function ForecastTable({ config, days, totals, entries, onUpdateE
           <tbody>
             {days.map((day, idx) => {
               const entry = entries[day.date];
+              const fromTiendanube = tiendanubeCoverage?.has(day.date) ?? false;
               const isEven = idx % 2 === 0;
               const rowCls = clsx(
                 "border-t border-zinc-800 transition-colors",
@@ -292,12 +311,16 @@ export default function ForecastTable({ config, days, totals, entries, onUpdateE
                     {fmt$(day.targetRevenue)}
                   </td>
                   <td className="px-3 py-1.5 w-28">
-                    <EditableCell
-                      value={entry?.realityRevenue ?? null}
-                      onChange={(v) => onUpdateEntry(day.date, { realityRevenue: v })}
-                      placeholder="0"
-                      highlight="green"
-                    />
+                    {fromTiendanube ? (
+                      <TiendanubeCell value={day.realityRevenue ?? 0} fmt={(n) => fmt$(n)} />
+                    ) : (
+                      <EditableCell
+                        value={entry?.realityRevenue ?? null}
+                        onChange={(v) => onUpdateEntry(day.date, { realityRevenue: v })}
+                        placeholder="0"
+                        highlight="green"
+                      />
+                    )}
                   </td>
                   <td className="px-3 py-1.5 text-right">
                     <PacingBadge ratio={day.pacingRevenue} />
@@ -316,13 +339,17 @@ export default function ForecastTable({ config, days, totals, entries, onUpdateE
                     />
                   </td>
                   <td className="px-3 py-1.5 w-24">
-                    <EditableCell
-                      value={entry?.realityOrders ?? null}
-                      onChange={(v) => onUpdateEntry(day.date, { realityOrders: v })}
-                      placeholder="0"
-                      highlight="green"
-                      step={1}
-                    />
+                    {fromTiendanube ? (
+                      <TiendanubeCell value={day.realityOrders ?? 0} fmt={(n) => fmtNum(n)} />
+                    ) : (
+                      <EditableCell
+                        value={entry?.realityOrders ?? null}
+                        onChange={(v) => onUpdateEntry(day.date, { realityOrders: v })}
+                        placeholder="0"
+                        highlight="green"
+                        step={1}
+                      />
+                    )}
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-orange-300">
                     {fmtCR(day.realCR)}

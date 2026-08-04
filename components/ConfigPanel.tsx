@@ -1,9 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { AppConfig, MonthCurve, ProjectionMode, SpecialEvent } from "@/lib/types";
+import { useCallback, useRef, useState } from "react";
+import { AppConfig, DailyMetric, MonthCurve, ProjectionMode, SpecialEvent } from "@/lib/types";
 import { nanoid } from "@/lib/nanoid";
 import { parseAndComputeWeights } from "@/lib/autoWeights";
+import { looksLikeTiendanube, parseTiendanubeFiles } from "@/lib/tiendanube";
+import { computeBlendWeights } from "@/lib/blendEngine";
 
 const PROJECTION_MODES: { value: ProjectionMode; label: string; derived: string }[] = [
   { value: "revenue_mer",   label: "Facturación + MER → Inversión",    derived: "Inversión" },
@@ -20,25 +22,91 @@ const DAY_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 interface Props {
   config: AppConfig;
   onChange: (config: AppConfig) => void;
+  // Serie diaria del CSV de Tiendanube cargado en esta sesión (null si no hay
+  // uno, o si el archivo subido no es de Tiendanube). Sube a page.tsx para que
+  // ForecastTable pueda auto-completar Reality Revenue/Pedidos sin persistirlo.
+  onTiendanubeMetrics: (metrics: DailyMetric[] | null) => void;
 }
 
-export default function ConfigPanel({ config, onChange }: Props) {
+export default function ConfigPanel({ config, onChange, onTiendanubeMetrics }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [weightError, setWeightError] = useState<string | null>(null);
 
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const text = evt.target?.result as string;
-      const result = parseAndComputeWeights(text);
-      if (!result.ok) { setWeightError(result.error); return; }
+  // Estado del flujo Tiendanube-aware (multi-archivo, filtro de estado de pago).
+  const [tnFiles, setTnFiles] = useState<File[] | null>(null);
+  const [tnStatuses, setTnStatuses] = useState<string[]>([]);
+  const [tnSelectedStatuses, setTnSelectedStatuses] = useState<Set<string>>(new Set());
+  const [tnRowCount, setTnRowCount] = useState<number | null>(null);
+  // Mes/año para el que se calculó el blend por última vez — si el usuario
+  // cambia el mes a proyectar después, se lo avisamos en vez de recalcular
+  // solo (evita el patrón de setState-en-effect y mantiene el mismo criterio
+  // "recalculás vos con un botón" que ya usa el flujo genérico de más abajo).
+  const [tnBlendMonth, setTnBlendMonth] = useState<{ year: number; month: number } | null>(null);
+
+  const applyTiendanubeBlend = useCallback(
+    async (files: File[], statusFilter: Set<string> | undefined) => {
+      const parsed = await parseTiendanubeFiles(files, statusFilter);
+      if (!parsed.ok) {
+        setWeightError(parsed.error);
+        onTiendanubeMetrics(null);
+        return;
+      }
       setWeightError(null);
-      onChange({ ...config, dayWeights: result.weights, monthCurve: result.monthCurve, autoWeightsMeta: result.meta });
-    };
-    reader.readAsText(file, "utf-8");
+      setTnRowCount(parsed.rowCount);
+      onTiendanubeMetrics(parsed.metrics);
+      const blend = computeBlendWeights(parsed.metrics, config.year, config.month);
+      if (!blend.ok) { setWeightError(blend.error); return; }
+      setTnBlendMonth({ year: config.year, month: config.month });
+      onChange({ ...config, dayWeights: blend.weights, monthCurve: blend.monthCurve, autoWeightsMeta: blend.meta });
+    },
+    [config, onChange, onTiendanubeMetrics]
+  );
+
+  const blendIsStale =
+    tnFiles != null && tnBlendMonth != null &&
+    (tnBlendMonth.year !== config.year || tnBlendMonth.month !== config.month);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    if (files.length === 0) return;
+
+    const firstText = await files[0].text();
+
+    if (looksLikeTiendanube(firstText)) {
+      setTnFiles(files);
+      const discover = await parseTiendanubeFiles(files);
+      if (!discover.ok) { setWeightError(discover.error); return; }
+      setTnStatuses(discover.paymentStatuses);
+      const defaults = new Set(discover.defaultPaidStatuses);
+      setTnSelectedStatuses(defaults);
+      await applyTiendanubeBlend(files, discover.paymentStatuses.length > 0 ? defaults : undefined);
+      return;
+    }
+
+    // No es un export de Tiendanube: cae al parser genérico existente
+    // (una sola ventana, sin blend estacional/reciente) — comportamiento
+    // histórico, sin cambios, para cualquier otro formato de CSV.
+    setTnFiles(null);
+    setTnStatuses([]);
+    setTnRowCount(null);
+    onTiendanubeMetrics(null);
+    const result = parseAndComputeWeights(firstText);
+    if (!result.ok) { setWeightError(result.error); return; }
+    setWeightError(null);
+    onChange({
+      ...config,
+      dayWeights: result.weights,
+      monthCurve: result.monthCurve,
+      autoWeightsMeta: { ...result.meta, source: "generic" },
+    });
+  }
+
+  function toggleStatus(status: string) {
+    const next = new Set(tnSelectedStatuses);
+    if (next.has(status)) next.delete(status); else next.add(status);
+    setTnSelectedStatuses(next);
+    if (tnFiles) applyTiendanubeBlend(tnFiles, next);
   }
 
   const mode = config.projectionMode ?? "revenue_mer";
@@ -215,6 +283,7 @@ export default function ConfigPanel({ config, onChange }: Props) {
               ref={fileInputRef}
               type="file"
               accept=".csv,.tsv,.txt"
+              multiple
               className="hidden"
               onChange={handleFileUpload}
             />
@@ -224,11 +293,17 @@ export default function ConfigPanel({ config, onChange }: Props) {
               <div className="bg-zinc-800 rounded-lg px-3 py-2.5 flex items-start justify-between gap-2">
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[11px] text-emerald-400 font-medium">
-                    ✓ {config.autoWeightsMeta.rowCount.toLocaleString("es-AR")} ventas · {config.autoWeightsMeta.monthCount} meses
+                    ✓ {config.autoWeightsMeta.rowCount.toLocaleString("es-AR")}{" "}
+                    {config.autoWeightsMeta.source === "tiendanube" ? "pedidos" : "ventas"} · {config.autoWeightsMeta.monthCount} meses
                   </span>
                   <span className="text-[10px] text-zinc-600">
                     {config.autoWeightsMeta.dateFrom} → {config.autoWeightsMeta.dateTo}
                   </span>
+                  {config.autoWeightsMeta.source === "tiendanube" && (
+                    <span className="text-[10px] text-sky-500">
+                      Blend estacional ({config.autoWeightsMeta.seasonalDays ?? 0}d) + reciente ({config.autoWeightsMeta.recentDays ?? 0}d)
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -237,7 +312,25 @@ export default function ConfigPanel({ config, onChange }: Props) {
                   Re-cargar
                 </button>
               </div>
-            ) : (
+            ) : null}
+
+            {blendIsStale && (
+              <div className="bg-amber-950 border border-amber-800 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-amber-400 leading-relaxed">
+                  Cambiaste el mes a proyectar — la ventana estacional del blend quedó desactualizada.
+                </span>
+                <button
+                  onClick={() =>
+                    tnFiles && applyTiendanubeBlend(tnFiles, tnSelectedStatuses.size > 0 ? tnSelectedStatuses : undefined)
+                  }
+                  className="text-[10px] font-semibold text-amber-300 hover:text-white bg-amber-900 hover:bg-amber-800 px-2 py-1 rounded transition-colors shrink-0"
+                >
+                  Recalcular
+                </button>
+              </div>
+            )}
+
+            {!config.autoWeightsMeta && (
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="border border-dashed border-zinc-700 hover:border-sky-600 rounded-lg p-4 text-center transition-colors group flex flex-col items-center gap-1.5"
@@ -249,7 +342,7 @@ export default function ConfigPanel({ config, onChange }: Props) {
                   Subir CSV de ventas históricas
                 </span>
                 <span className="text-[10px] text-zinc-700">
-                  Mínimo 3 meses · columnas fecha y monto
+                  Podés elegir varios archivos a la vez (ej. histórico + últimos días)
                 </span>
               </button>
             )}
@@ -258,6 +351,34 @@ export default function ConfigPanel({ config, onChange }: Props) {
             {weightError && (
               <div className="bg-red-950 border border-red-800 rounded-lg px-3 py-2 text-[11px] text-red-400 leading-relaxed">
                 {weightError}
+              </div>
+            )}
+
+            {/* Payment status filter — solo aparece con export de Tiendanube */}
+            {tnFiles && tnStatuses.length > 0 && (
+              <div className="bg-zinc-800 rounded-lg px-3 py-2.5 flex flex-col gap-1.5">
+                <p className="text-[10px] text-zinc-500">Estados de pago a incluir como facturación real</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {tnStatuses.map((status) => {
+                    const active = tnSelectedStatuses.has(status);
+                    return (
+                      <button
+                        key={status}
+                        onClick={() => toggleStatus(status)}
+                        className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                          active
+                            ? "bg-sky-700 border-sky-600 text-white"
+                            : "bg-transparent border-zinc-700 text-zinc-500 hover:border-zinc-500"
+                        }`}
+                      >
+                        {status}
+                      </button>
+                    );
+                  })}
+                </div>
+                {tnRowCount != null && (
+                  <p className="text-[10px] text-zinc-600">{tnRowCount.toLocaleString("es-AR")} pedidos después del filtro</p>
+                )}
               </div>
             )}
 
@@ -329,7 +450,9 @@ export default function ConfigPanel({ config, onChange }: Props) {
               Eventos Especiales
             </h2>
             <p className="text-[10px] text-zinc-600 mt-0.5">
-              Varios eventos en la misma fecha se acumulan
+              Varios eventos en la misma fecha se acumulan · MER es opcional: si ese día va a ser
+              más (o menos) eficiente que el objetivo, el presupuesto de Spend del mes se
+              redistribuye entre el resto de los días
             </p>
           </div>
           <button
@@ -371,16 +494,32 @@ export default function ConfigPanel({ config, onChange }: Props) {
                 value={event.label}
                 onChange={(e) => updateEvent(event.id, { label: e.target.value })}
               />
-              <div className="flex flex-col gap-1">
-                <label className="label">Peso adicional (+)</label>
-                <input
-                  type="number"
-                  className="input text-xs"
-                  min={0}
-                  step={0.1}
-                  value={event.weight}
-                  onChange={(e) => updateEvent(event.id, { weight: Number(e.target.value) })}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className="label">Peso adicional (+)</label>
+                  <input
+                    type="number"
+                    className="input text-xs"
+                    min={0}
+                    step={0.1}
+                    value={event.weight}
+                    onChange={(e) => updateEvent(event.id, { weight: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="label">MER esperado (opc.)</label>
+                  <input
+                    type="number"
+                    className="input text-xs"
+                    min={0}
+                    step={0.1}
+                    placeholder="Ej: 10"
+                    value={event.mer ?? ""}
+                    onChange={(e) =>
+                      updateEvent(event.id, { mer: e.target.value === "" ? undefined : Number(e.target.value) })
+                    }
+                  />
+                </div>
               </div>
             </div>
           ))}
