@@ -11,8 +11,12 @@ import {
   bootstrapProjections,
   deleteClientData,
   deleteProjectionData,
+  loadActiveClientId,
+  loadActiveProjId,
+  loadClients,
   loadProjectionConfig,
   loadProjectionEntries,
+  loadProjections,
   saveActiveClientId,
   saveActiveProjId,
   saveClients,
@@ -21,6 +25,9 @@ import {
   saveProjections,
 } from "@/lib/storage";
 import { nanoid } from "@/lib/nanoid";
+import { CloudRow, deleteCloudRows, fetchCloudRows, pushCloudRow } from "@/lib/cloudSync";
+
+const SHEETS_MIGRATED_KEY = "dfe_sheets_migrated";
 
 type CreatingMode = "client" | "projection" | null;
 
@@ -64,6 +71,19 @@ function InlineForm({ inputRef, value, placeholder, onChange, onConfirm, onCance
   );
 }
 
+// ── Cloud sync helpers (puras, sin estado) ─────────────────────────────────────
+function rowsToClients(rows: CloudRow[]): ClientMeta[] {
+  const seen = new Map<string, string>();
+  for (const r of rows) if (!seen.has(r.clientId)) seen.set(r.clientId, r.clientName);
+  return Array.from(seen, ([id, name]) => ({ id, name }));
+}
+function rowsToProjections(rows: CloudRow[], clientId: string): ProjectionMeta[] {
+  return rows.filter((r) => r.clientId === clientId).map((r) => ({ id: r.projectionId, name: r.projectionName }));
+}
+function findCloudRow(rows: CloudRow[], clientId: string, projectionId: string): CloudRow | undefined {
+  return rows.find((r) => r.clientId === clientId && r.projectionId === projectionId);
+}
+
 // ── Trash icon ────────────────────────────────────────────────────────────────
 function TrashIcon() {
   return (
@@ -88,6 +108,10 @@ export default function Home() {
   // CSV de Tiendanube cargado en esta sesión — NO se persiste (se resube cada
   // vez), solo se usa para auto-completar Reality Revenue/Pedidos en la tabla.
   const [tnMetrics,      setTnMetrics]      = useState<DailyMetric[] | null>(null);
+  // true si Google Sheets está configurado y respondió al menos una vez esta
+  // sesión — mientras sea false, todo sigue funcionando 100% con localStorage
+  // exactamente como antes.
+  const [cloudEnabled,   setCloudEnabled]   = useState(false);
 
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -102,6 +126,78 @@ export default function Home() {
     setConfig(loadProjectionConfig(cid, pid));
     setEntries(loadProjectionEntries(cid, pid));
     setHydrated(true);
+  }, []);
+
+  // ── Boot desde Google Sheets (si está configurado) ─────────────────────────────
+  // Corre después del boot local de arriba. Si Sheets tiene datos, se usan como
+  // fuente de verdad (y se reflejan también en localStorage, como caché). Si
+  // Sheets está configurado pero vacío y localStorage ya tenía clientes, se
+  // migran una sola vez (flag en localStorage). Si Sheets no responde o no está
+  // configurado, no se toca nada — la app sigue 100% con lo que cargó arriba.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const cloud = await fetchCloudRows();
+      if (cancelled || !cloud || !cloud.configured) return;
+
+      if (cloud.rows.length > 0) {
+        const cls = rowsToClients(cloud.rows);
+        if (cls.length === 0) return;
+        const cid = cls.find((c) => c.id === loadActiveClientId())?.id ?? cls[0].id;
+        const projs = rowsToProjections(cloud.rows, cid);
+        if (projs.length === 0) return;
+        const pid = projs.find((p) => p.id === loadActiveProjId(cid))?.id ?? projs[0].id;
+        const row = findCloudRow(cloud.rows, cid, pid);
+        if (!row) return;
+
+        const cfg: AppConfig = { ...DEFAULT_CONFIG, ...JSON.parse(row.configJson || "{}") };
+        const ent: Record<string, DayEntry> = JSON.parse(row.entriesJson || "{}");
+
+        saveClients(cls);
+        saveActiveClientId(cid);
+        saveProjections(cid, projs);
+        saveActiveProjId(cid, pid);
+        saveProjectionConfig(cid, pid, cfg);
+        saveProjectionEntries(cid, pid, ent);
+
+        if (cancelled) return;
+        setClients(cls);
+        setActiveClientId(cid);
+        setProjections(projs);
+        setActiveProjId(pid);
+        setConfig(cfg);
+        setEntries(ent);
+        setCloudEnabled(true);
+        return;
+      }
+
+      // Sheets configurado pero vacío: migrar localStorage una sola vez.
+      if (localStorage.getItem(SHEETS_MIGRATED_KEY) === "1") {
+        setCloudEnabled(true);
+        return;
+      }
+      const localClients = loadClients();
+      for (const c of localClients) {
+        const localProjs = loadProjections(c.id);
+        const projList = localProjs.length > 0 ? localProjs : [{ id: "proj_default", name: "Proyección Principal" }];
+        for (const p of projList) {
+          const cfg = loadProjectionConfig(c.id, p.id);
+          const ent = loadProjectionEntries(c.id, p.id);
+          await pushCloudRow({
+            clientId: c.id,
+            clientName: c.name,
+            projectionId: p.id,
+            projectionName: p.name,
+            configJson: JSON.stringify(cfg),
+            entriesJson: JSON.stringify(ent),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+      localStorage.setItem(SHEETS_MIGRATED_KEY, "1");
+      if (!cancelled) setCloudEnabled(true);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -135,6 +231,17 @@ export default function Home() {
     setClients(updated);
     cancelCreating();
     switchClient(id);
+    if (cloudEnabled) {
+      // Fila inicial con la proyección default que switchClient/bootstrapProjections
+      // va a crear localmente — así el cliente no "desaparece" en la nube si
+      // recargás antes de tocar nada.
+      pushCloudRow({
+        clientId: id, clientName: name,
+        projectionId: "proj_default", projectionName: "Proyección Principal",
+        configJson: JSON.stringify(DEFAULT_CONFIG), entriesJson: "{}",
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 
   function confirmCreateProjection() {
@@ -147,6 +254,15 @@ export default function Home() {
     saveProjectionConfig(activeClientId, pid, DEFAULT_CONFIG);
     cancelCreating();
     switchProjection(activeClientId, pid);
+    if (cloudEnabled) {
+      const clientName = clients.find((c) => c.id === activeClientId)?.name ?? "";
+      pushCloudRow({
+        clientId: activeClientId, clientName,
+        projectionId: pid, projectionName: name,
+        configJson: JSON.stringify(DEFAULT_CONFIG), entriesJson: "{}",
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 
   function cancelCreating() { setCreating(null); setNewName(""); }
@@ -161,6 +277,7 @@ export default function Home() {
     saveClients(updated);
     setClients(updated);
     if (cid === activeClientId) switchClient(updated[0].id);
+    if (cloudEnabled) deleteCloudRows(cid);
   }
 
   function deleteProjection(pid: string) {
@@ -172,6 +289,7 @@ export default function Home() {
     saveProjections(activeClientId, updated);
     setProjections(updated);
     if (pid === activeProjId) switchProjection(activeClientId, updated[0].id);
+    if (cloudEnabled) deleteCloudRows(activeClientId, pid);
   }
 
   // ── Save flash ────────────────────────────────────────────────────────────────
@@ -181,9 +299,23 @@ export default function Home() {
   }
 
   // ── Data handlers ─────────────────────────────────────────────────────────────
+  function pushCurrentToCloud(cfg: AppConfig, ent: Record<string, DayEntry>) {
+    if (!cloudEnabled) return;
+    pushCloudRow({
+      clientId: activeClientId,
+      clientName: clients.find((c) => c.id === activeClientId)?.name ?? "",
+      projectionId: activeProjId,
+      projectionName: projections.find((p) => p.id === activeProjId)?.name ?? "",
+      configJson: JSON.stringify(cfg),
+      entriesJson: JSON.stringify(ent),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   function handleConfigChange(next: AppConfig) {
     setConfig(next);
     saveProjectionConfig(activeClientId, activeProjId, next);
+    pushCurrentToCloud(next, entries);
   }
 
   function handleUpdateEntry(date: string, patch: Partial<DayEntry>) {
@@ -195,6 +327,7 @@ export default function Home() {
       };
       const next = { ...prev, [date]: { ...current, ...patch } };
       saveProjectionEntries(activeClientId, activeProjId, next);
+      if (config) pushCurrentToCloud(config, next);
       return next;
     });
   }
@@ -345,7 +478,18 @@ export default function Home() {
             </div>
           )}
 
-          <span className="text-zinc-600 text-xs ml-auto shrink-0 hidden lg:block">
+          <span
+            className={`text-[10px] px-2 py-1 rounded-full border ml-auto shrink-0 ${
+              cloudEnabled
+                ? "border-emerald-800 text-emerald-400"
+                : "border-zinc-700 text-zinc-600"
+            }`}
+            title={cloudEnabled ? "Sincronizado con Google Sheets" : "Guardando solo en este navegador (localStorage)"}
+          >
+            {cloudEnabled ? "☁ Sheets" : "💾 Local"}
+          </span>
+
+          <span className="text-zinc-600 text-xs shrink-0 hidden lg:block">
             {new Date().toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" })}
           </span>
         </div>
