@@ -8,11 +8,27 @@ export type ProjectionMode = "revenue_mer" | "spend_mer" | "spend_revenue";
 
 export type WeightMode = "manual" | "auto";
 
+export type Weights7 = [number, number, number, number, number, number, number];
+
 export interface AutoWeightMeta {
   rowCount: number;
   monthCount: number;
   dateFrom: string;
   dateTo: string;
+  // "tiendanube" = parser específico (dedup por orden + filtro de pago) con blend
+  // estacional/reciente 70/30; "generic" = detección de columnas por keyword,
+  // una sola ventana (comportamiento histórico de autoWeights.ts).
+  source?: "tiendanube" | "generic";
+  seasonalDays?: number;
+  recentDays?: number;
+}
+
+// Serie diaria de ventas ya limpia (una fila = un pedido, sin duplicar por línea
+// de producto). La produce lib/tiendanube.ts y la consume lib/blendEngine.ts.
+export interface DailyMetric {
+  date: string; // YYYY-MM-DD
+  revenue: number;
+  pedidos: number;
 }
 
 export interface ClientMeta {
@@ -30,6 +46,10 @@ export interface SpecialEvent {
   date: string; // YYYY-MM-DD
   label: string;
   weight: number; // always added to composed base weight
+  // MER esperado ESE día (no un multiplicador). Si se carga, el presupuesto de
+  // Spend del mes se reparte distinto ese día (ver calc.ts::computeDays) — el
+  // total del mes sigue dando targetMER, pero el MER día a día pasa a variar.
+  mer?: number;
 }
 
 export interface MonthCurve {

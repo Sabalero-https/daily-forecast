@@ -20,6 +20,14 @@ function eventsForDate(dateStr: string, events: SpecialEvent[]): SpecialEvent[] 
   return events.filter((e) => e.date === dateStr);
 }
 
+// MER esperado de un día si algún evento de esa fecha lo trae cargado (promedio
+// si hay más de uno). null = ese día usa el MER objetivo general, sin ajuste.
+function eventMerForDate(dateStr: string, events: SpecialEvent[]): number | null {
+  const withMer = eventsForDate(dateStr, events).filter((e) => e.mer != null && e.mer > 0);
+  if (withMer.length === 0) return null;
+  return withMer.reduce((s, e) => s + (e.mer as number), 0) / withMer.length;
+}
+
 function curveMultiplier(dayOfMonth: number, config: AppConfig): number {
   if (dayOfMonth <= 10) return config.monthCurve.early;
   if (dayOfMonth <= 20) return config.monthCurve.mid;
@@ -80,12 +88,29 @@ export function computeDays(
   );
   const totalWeight = weights.reduce((s, w) => s + w, 0);
 
+  // El presupuesto total de Spend del mes queda fijo (totalSpend, de arriba). Un
+  // día con MER propio en un evento (más o menos eficiente que el objetivo)
+  // necesita proporcionalmente más o menos presupuesto por cada peso de Revenue
+  // — lo que ahorra/consume ese día se redistribuye entre el resto, así el MER
+  // termina variando día a día pero el total del mes sigue dando el MER objetivo.
+  // Sin ningún evento con MER cargado, spendWeights === weights y el resultado
+  // es idéntico a antes.
+  const effectiveTargetMER = totalSpend > 0 ? totalRevenue / totalSpend : targetMER;
+  const spendRaw = days.map((d, i) => {
+    const dayMer = eventMerForDate(toDateStr(d), config.specialEvents);
+    if (dayMer && effectiveTargetMER) return weights[i] * (effectiveTargetMER / dayMer);
+    return weights[i];
+  });
+  const totalSpendRaw = spendRaw.reduce((s, w) => s + w, 0);
+  const spendWeights =
+    totalSpendRaw > 0 ? spendRaw.map((w) => w / totalSpendRaw) : days.map(() => 0);
+
   return days.map((d, i) => {
     const dateStr = toDateStr(d);
     const w = weights[i];
     const share = totalWeight > 0 ? w / totalWeight : 0;
     const tRev = totalRevenue * share;
-    const tSpend = totalSpend * share;
+    const tSpend = totalSpend * spendWeights[i];
     const tSessions = guideAOV > 0 && crRatio > 0 ? tRev / guideAOV / crRatio : null;
 
     const entry = entries[dateStr];
