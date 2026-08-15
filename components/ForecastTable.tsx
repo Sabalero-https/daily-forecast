@@ -114,10 +114,15 @@ function downloadCSV(days: ComputedDay[]) {
 // ── Métricas Guía panel ───────────────────────────────────────────────────────
 
 function MetricasGuia({ config, totals }: { config: AppConfig; totals: TotalsRow }) {
-  const { targetRevenue, guideAOV, guideCR } = config;
+  const { guideAOV, guideCR } = config;
   const crRatio = guideCR > 0 ? guideCR / 100 : 0;
 
-  const neededOrders = guideAOV > 0 ? targetRevenue / guideAOV : null;
+  // Usa el total YA CALCULADO del mes (totals.totalTargetRevenue), no
+  // config.targetRevenue directo — ese campo solo se completa en los modos
+  // "Facturación + MER" y "Inversión + Facturación"; en "Inversión + MER" la
+  // Facturación es un valor derivado que nunca se guarda ahí, así que leerlo
+  // crudo daba siempre 0 en ese modo (bug preexistente, no de este cambio).
+  const neededOrders = guideAOV > 0 ? totals.totalTargetRevenue / guideAOV : null;
   const neededSessions = neededOrders != null && crRatio > 0 ? neededOrders / crRatio : null;
 
   return (
