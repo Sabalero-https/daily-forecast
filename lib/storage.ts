@@ -20,6 +20,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   targetSpend: 0,
   guideAOV: 0,
   guideCR: 0,
+  guidePaidShare: 0,
   dayWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
   monthCurve: { early: 1.0, mid: 1.0, late: 1.0 },
   specialEvents: [],

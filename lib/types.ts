@@ -18,6 +18,8 @@ export interface AutoWeightMeta {
 export interface ClientMeta {
   id: string;
   name: string;
+  // URL del spreadsheet del cliente (su Daily Forecast) al que se mandan los objetivos.
+  spreadsheetUrl?: string;
 }
 
 export interface ProjectionMeta {
@@ -47,6 +49,8 @@ export interface AppConfig {
   targetSpend: number;
   guideAOV: number;
   guideCR: number;
+  // % de las sesiones objetivo que se espera que vengan de pauta (0 = sin definir).
+  guidePaidShare: number;
   weightMode: WeightMode;
   autoWeightsMeta: AutoWeightMeta | null;
   // index 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun

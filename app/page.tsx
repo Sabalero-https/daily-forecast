@@ -182,6 +182,12 @@ export default function Home() {
     saveProjectionConfig(activeClientId, activeProjId, next);
   }
 
+  function handleSpreadsheetUrlChange(url: string) {
+    const updated = clients.map((c) => (c.id === activeClientId ? { ...c, spreadsheetUrl: url } : c));
+    saveClients(updated);
+    setClients(updated);
+  }
+
   function handleUpdateEntry(date: string, patch: Partial<DayEntry>) {
     setEntries((prev) => {
       const current: DayEntry = prev[date] ?? {
@@ -198,6 +204,7 @@ export default function Home() {
   // ── Derived ───────────────────────────────────────────────────────────────────
   const days   = useMemo(() => config ? computeDays(config, entries) : [], [config, entries]);
   const totals = useMemo(() => computeTotals(days, toDateStr(new Date())), [days]);
+  const activeClient = clients.find((c) => c.id === activeClientId);
 
   if (!hydrated || !config) {
     return (
@@ -335,6 +342,9 @@ export default function Home() {
           totals={totals}
           entries={entries}
           onUpdateEntry={handleUpdateEntry}
+          clientName={activeClient?.name ?? ""}
+          spreadsheetUrl={activeClient?.spreadsheetUrl ?? ""}
+          onSpreadsheetUrlChange={handleSpreadsheetUrlChange}
         />
       </main>
     </div>

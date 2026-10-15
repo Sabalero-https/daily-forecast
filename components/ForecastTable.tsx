@@ -2,6 +2,7 @@
 
 import { AppConfig, ComputedDay, DayEntry } from "@/lib/types";
 import { TotalsRow, exportToCSV } from "@/lib/calc";
+import EnviarObjetivos from "./EnviarObjetivos";
 import clsx from "clsx";
 
 interface Props {
@@ -10,6 +11,9 @@ interface Props {
   totals: TotalsRow;
   entries: Record<string, DayEntry>;
   onUpdateEntry: (date: string, patch: Partial<DayEntry>) => void;
+  clientName: string;
+  spreadsheetUrl: string;
+  onSpreadsheetUrlChange: (url: string) => void;
 }
 
 // ── Event badge palette ───────────────────────────────────────────────────────
@@ -183,7 +187,9 @@ function GuideCard({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ForecastTable({ config, days, totals, entries, onUpdateEntry }: Props) {
+export default function ForecastTable({
+  config, days, totals, entries, onUpdateEntry, clientName, spreadsheetUrl, onSpreadsheetUrlChange,
+}: Props) {
   if (days.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
@@ -202,6 +208,15 @@ export default function ForecastTable({ config, days, totals, entries, onUpdateE
       {/* Métricas Guía */}
       <MetricasGuia config={config} totals={totals} />
 
+      {/* Objetivos → spreadsheet del cliente */}
+      <EnviarObjetivos
+        config={config}
+        days={days}
+        clientName={clientName}
+        spreadsheetUrl={spreadsheetUrl}
+        onSpreadsheetUrlChange={onSpreadsheetUrlChange}
+      />
+
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-zinc-300">
@@ -214,7 +229,7 @@ export default function ForecastTable({ config, days, totals, entries, onUpdateE
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 4v11" />
           </svg>
-          Exportar CSV
+          Exportar tabla
         </button>
       </div>
 

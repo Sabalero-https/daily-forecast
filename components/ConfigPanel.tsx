@@ -172,6 +172,14 @@ export default function ConfigPanel({ config, onChange }: Props) {
           </div>
         </div>
 
+        {/* % de sesiones que se espera que vengan de pauta (opcional) */}
+        <div className="flex flex-col gap-1">
+          <label className="label">Sesiones de pauta (% del total, opcional)</label>
+          <input type="number" className="input" min={0} max={100} step={1} placeholder="Ej. 60"
+            value={config.guidePaidShare || ""}
+            onChange={(e) => set("guidePaidShare", Number(e.target.value))} />
+        </div>
+
         {/* Derived value display */}
         <div className="bg-zinc-800 rounded-lg px-4 py-3 flex justify-between items-center">
           <span className="text-xs text-zinc-400">
